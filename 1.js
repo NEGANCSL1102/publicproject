@@ -74,17 +74,17 @@ server.listen(7777, () => {
 
 setInterval(() => {
   const bayGio = Date.now();
-  for (let bot of danhSachBot) {
+  danhSachBot.forEach(bot => {
     if (bayGio - bot.lastResponse > 1000) ngatKetNoi(bot.socket);
     else try { bot.socket.write('uptime -p\n') } catch { ngatKetNoi(bot.socket) }
-  }
-}, 200);
+  });
+}, 1000);
 
 bot.onText(/^\/listbot$/, msg => {
   if (msg.chat.id !== chatIdAdmin) return;
   if (danhSachBot.length === 0) return bot.sendMessage(chatIdAdmin, '❌ Không có bot nào kết nối.');
   let text = `🤖 Có ${danhSachBot.length} bot đang kết nối:\n`;
-  for (let bot of danhSachBot) text += `Bot ${bot.id} - [${bot.ip}:${bot.port}] - Uptime: ${bot.uptime}\n`;
+  danhSachBot.forEach(bot => text += `Bot ${bot.id} - [${bot.ip}:${bot.port}] - Uptime: ${bot.uptime}\n`);
   bot.sendMessage(chatIdAdmin, text);
 });
 
