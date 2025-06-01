@@ -82,4 +82,4 @@ bot.onText(/^\/cmd (.+)/, (_, match) => {
       c.socket.write(cmd + '\n');
     } catch (e) {}
   });
-});
+}); 
